@@ -24,7 +24,7 @@ if not exist "models" (
 
 echo.
 echo Downloading model file...
-powershell -Command "Invoke-WebRequest -Uri 'https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt' -OutFile 'models\sharp_2572gikvuh.pt'"
+powershell -Command "$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri 'https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt' -OutFile 'models\sharp_2572gikvuh.pt'"
 
 if exist "models\sharp_2572gikvuh.pt" (
     echo Model downloaded successfully!
