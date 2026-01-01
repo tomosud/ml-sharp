@@ -11,7 +11,7 @@ import logging
 import torch
 from torch import nn
 
-from sharp.models.monodepth import MonodepthWithEncodingAdaptor
+from sharp.models.monodepth import MonodepthOutput, MonodepthWithEncodingAdaptor
 from sharp.utils.gaussians import Gaussians3D
 
 from .composer import GaussianComposer
@@ -100,12 +100,12 @@ class RGBGaussianPredictor(nn.Module):
         self.gaussian_composer = gaussian_composer
         self.depth_alignment = DepthAlignment(scale_map_estimator)
 
-    def forward(
+    def _forward_impl(
         self,
         image: torch.Tensor,
         disparity_factor: torch.Tensor,
         depth: torch.Tensor | None = None,
-    ) -> Gaussians3D:
+    ) -> tuple[Gaussians3D, MonodepthOutput, torch.Tensor]:
         """Predict 3D Gaussians.
 
         Args:
@@ -189,7 +189,26 @@ class RGBGaussianPredictor(nn.Module):
             base_values=init_output.gaussian_base_values,
             global_scale=init_output.global_scale,
         )
+        return gaussians, monodepth_output, monodepth
+
+    def forward(
+        self,
+        image: torch.Tensor,
+        disparity_factor: torch.Tensor,
+        depth: torch.Tensor | None = None,
+    ) -> Gaussians3D:
+        """Predict 3D Gaussians."""
+        gaussians, _, _ = self._forward_impl(image, disparity_factor, depth)
         return gaussians
+
+    def predict_with_monodepth(
+        self,
+        image: torch.Tensor,
+        disparity_factor: torch.Tensor,
+        depth: torch.Tensor | None = None,
+    ) -> tuple[Gaussians3D, MonodepthOutput, torch.Tensor]:
+        """Predict Gaussians and return monodepth outputs and metric depth."""
+        return self._forward_impl(image, disparity_factor, depth)
 
     def internal_resolution(self) -> int:
         """Internal resolution."""

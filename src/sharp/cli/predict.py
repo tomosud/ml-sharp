@@ -20,7 +20,7 @@ from sharp.models import (
     RGBGaussianPredictor,
     create_predictor,
 )
-from sharp.utils import io
+from sharp.utils import io, vis
 from sharp.utils import logging as logging_utils
 from sharp.utils.gaussians import (
     Gaussians3D,
@@ -121,7 +121,9 @@ def predict_cli(
         LOGGER.info("Loading checkpoint from %s", checkpoint_path)
         state_dict = torch.load(checkpoint_path, weights_only=True)
 
-    gaussian_predictor = create_predictor(PredictorParams())
+    predictor_params = PredictorParams()
+    predictor_params.sorting_monodepth = True
+    gaussian_predictor = create_predictor(predictor_params)
     gaussian_predictor.load_state_dict(state_dict)
     gaussian_predictor.eval()
     gaussian_predictor.to(device)
@@ -142,10 +144,13 @@ def predict_cli(
             device=device,
             dtype=torch.float32,
         )
-        gaussians = predict_image(gaussian_predictor, image, f_px, torch.device(device))
+        gaussians, monodepth = predict_image(gaussian_predictor, image, f_px, torch.device(device))
 
         LOGGER.info("Saving 3DGS to %s", output_path)
         save_ply(gaussians, f_px, (height, width), output_path / f"{image_path.stem}.ply")
+
+        LOGGER.info("Saving depth layers to %s", output_path)
+        save_depth_layers(monodepth, output_path / image_path.stem)
 
         if with_rendering:
             output_video_path = (output_path / image_path.stem).with_suffix(".mp4")
@@ -161,7 +166,7 @@ def predict_image(
     image: np.ndarray,
     f_px: float,
     device: torch.device,
-) -> Gaussians3D:
+) -> tuple[Gaussians3D, torch.Tensor]:
     """Predict Gaussians from an image."""
     internal_shape = (1536, 1536)
 
@@ -179,7 +184,9 @@ def predict_image(
 
     # Predict Gaussians in the NDC space.
     LOGGER.info("Running inference.")
-    gaussians_ndc = predictor(image_resized_pt, disparity_factor)
+    gaussians_ndc, _, monodepth = predictor.predict_with_monodepth(
+        image_resized_pt, disparity_factor
+    )
 
     LOGGER.info("Running postprocessing.")
     intrinsics = (
@@ -203,4 +210,33 @@ def predict_image(
         gaussians_ndc, torch.eye(4).to(device), intrinsics_resized, internal_shape
     )
 
-    return gaussians
+    return gaussians, monodepth
+
+
+def save_depth_layers(depth: torch.Tensor, output_base: Path) -> None:
+    """Save monodepth layers to .npy and .png."""
+    depth_cpu = depth.detach().float().cpu()
+    if depth_cpu.ndim == 4:
+        depth_cpu = depth_cpu[0]
+    elif depth_cpu.ndim == 2:
+        depth_cpu = depth_cpu.unsqueeze(0)
+
+    if depth_cpu.ndim != 3:
+        raise ValueError(f"Expected depth with shape [L,H,W], got {tuple(depth_cpu.shape)}")
+
+    num_layers = depth_cpu.shape[0]
+    for layer_idx in range(num_layers):
+        depth_layer = depth_cpu[layer_idx]
+        np.save(
+            output_base.with_suffix(f".depth{layer_idx + 1}.npy"),
+            depth_layer.numpy(),
+        )
+        colored = vis.colorize_depth(
+            depth_layer.unsqueeze(0),
+            val_max=vis.METRIC_DEPTH_MAX_CLAMP_METER,
+        )
+        colored_np = colored.permute(1, 2, 0).numpy()
+        io.save_image(
+            colored_np,
+            output_base.with_suffix(f".depth{layer_idx + 1}.png"),
+        )
